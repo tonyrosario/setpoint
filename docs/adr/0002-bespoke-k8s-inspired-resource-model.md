@@ -1,0 +1,3 @@
+# Bespoke but Kubernetes-inspired resource model
+
+The Control Plane Core reuses the Kubernetes concepts that carry the design lessons — a `spec`/`status` split on every resource, level-triggered reconciliation, and a work queue with backoff/retry — while skipping the protocol plumbing: no watch protocol, no resource versions (single-writer core at first), no admission webhooks. Full API-machinery replication would cost months and teach little that platform interviews probe; a fully bespoke model would lose the shared vocabulary interviewers speak. Hardening toward real machinery (e.g., optimistic concurrency when the core goes multi-writer) is an explicit later milestone, not scope creep.

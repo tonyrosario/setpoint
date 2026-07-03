@@ -1,0 +1,5 @@
+# SQLite document store for desired state, in-memory to bootstrap
+
+The Control Plane Core talks to a Store contract. The decided destination is **SQLite storing resources as documents** — one row per resource `(kind, name, spec_json, status_json, ...)`, never normalized per-type tables, because Providers define new resource types over time and the store must not couple to any resource shape (the same reason etcd-as-KV works for Kubernetes). An **in-memory Store implementation comes first** to get off the ground; swapping in SQLite with zero core changes is the milestone that proves the contract. Flat files (hand-rolled atomicity) and bbolt (no queryability gain for a single-node sandbox) were rejected.
+
+Ownership rule: **Spec** is the source of truth for desired state — only user API calls may write it. **Status** is persisted only as a cache for the Portal; the Substrate is the source of truth for observed state, and the reconciler overwrites Status every pass. Note: until the SQLite swap, the crash-recovery demo (restart → observe → converge) doesn't survive a process restart; that demo lands with the swap.

@@ -1,0 +1,3 @@
+# Monorepo for the platform; managed repos live outside it
+
+The platform is one repo — `core/` (Go), `providers/` (Go), `portal/` (TS), `cli/` (Go), `examples/` — with the layer boundaries enforced by module structure (providers and clients import only public contract packages, never core internals), not repo walls. Greenfield cross-layer changes stay atomic, and CONTEXT.md/ADRs govern everything from one place. Multi-repo (Crossplane-faithful provider packaging) was rejected as PR-choreography while the contracts are still finding their shape. Clarifying corollary: repos that the platform itself generates and manages (Repository Primitives from Service Claims) are deliberately outside the monorepo — the monorepo is the platform; managed repos are its products.

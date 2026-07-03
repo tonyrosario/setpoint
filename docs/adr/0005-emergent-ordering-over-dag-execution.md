@@ -1,0 +1,5 @@
+# Emergent ordering via readiness, not DAG execution
+
+When resources depend on each other, ordering emerges from the reconcile loop rather than a central orchestrator: cross-resource References resolve through the referenced resource's Status, and an unresolvable Reference means "not ready, requeue with backoff" — never an error. This is the Crossplane answer; the CloudFormation answer (parse references, execute a DAG in topological order under a stack state machine) was rejected because edge-triggered orchestration fights the level-triggered core (ADR-0002), and readiness-based ordering also repairs post-creation failures a one-shot DAG cannot (a dependency dying later just makes dependents unready again).
+
+Accepted costs: no transactional rollback (we get convergence toward the new Spec instead), and failure diagnosis is "why is this resource stuck unready?" rather than a halted plan's stack trace. A CloudFormation-change-set-style **read-only planning view** built from the same references (a DAG that informs humans but never drives execution) is a deferred milestone.

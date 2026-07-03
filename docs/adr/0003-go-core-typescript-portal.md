@@ -1,0 +1,3 @@
+# Go for the Control Plane Core and Providers, TypeScript for the Portal
+
+Go is the native language of the control-plane domain (Kubernetes, Crossplane, Terraform, Docker); goroutines map naturally onto reconcile loops and work queues, and it signals domain fluency to platform-engineering interviewers. The Portal is TypeScript, matching Backstage itself and making a catalog UI tractable. The language boundary deliberately enforces the architectural boundary: the Portal cannot import core internals, only speak to its public API. Single-language TypeScript throughout was rejected — a Node reconciler works, but the concurrency story is a weaker interview artifact.

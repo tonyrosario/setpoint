@@ -1,0 +1,5 @@
+# Simplified composition, no new execution machinery
+
+Composition is in scope — it is the golden-path mechanism that makes this a platform-engineering artifact rather than a generic infra sandbox — but simplified: a **Composition** is itself a resource declaring an abstract kind plus a template of primitives, with patches mapping the abstract Spec's fields into primitive Specs. A single composition reconciler expands each **Claim** into its child primitives; from there the existing machinery (References, readiness, emergent ordering per ADR-0005) does all the work, and the Claim's Status rolls up from its children's readiness. The design constraint worth recording: composition adds *no new execution model* — an expanded child is just a resource.
+
+Rejected: primitives-only scope (kills the golden-path story and most of the Portal's point) and faithful Crossplane replication (composition revisions, function pipelines, multi-composition selection — months of machinery we can discuss in interviews without building). This lands as a milestone only after primitives reconcile end-to-end.
