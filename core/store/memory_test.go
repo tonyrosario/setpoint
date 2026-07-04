@@ -111,6 +111,25 @@ func TestDelete(t *testing.T) {
 	}
 }
 
+func TestUpdateStatusCopiesObserved(t *testing.T) {
+	m := NewMemory()
+	ctx := context.Background()
+	m.Put(ctx, testResource("web"))
+
+	observed := map[string]string{"containerId": "abc123"}
+	if err := m.UpdateStatus(ctx, "container", "web", api.Status{Observed: observed}); err != nil {
+		t.Fatalf("update status: %v", err)
+	}
+
+	// Mutating the caller's map after the call must not touch stored state.
+	observed["containerId"] = "TAMPERED"
+
+	got, _ := m.Get(ctx, "container", "web")
+	if got.Status.Observed["containerId"] != "abc123" {
+		t.Errorf("stored Observed aliased caller's map: got %q", got.Status.Observed["containerId"])
+	}
+}
+
 func TestCopiesAreIsolated(t *testing.T) {
 	m := NewMemory()
 	ctx := context.Background()

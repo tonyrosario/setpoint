@@ -73,7 +73,10 @@ func (m *Memory) UpdateStatus(ctx context.Context, kind, name string, status api
 	if !ok {
 		return ErrNotFound
 	}
-	res.Status = status
+	// Copy the caller's Status (including its Observed map) so the stored
+	// entry never shares a map reference with the caller — the same
+	// copy-in/copy-out invariant Put honours via copyResource.
+	res.Status = copyStatus(status)
 	return nil
 }
 
@@ -91,11 +94,19 @@ func (m *Memory) Delete(ctx context.Context, kind, name string) error {
 func copyResource(res *api.Resource) *api.Resource {
 	cp := *res
 	cp.Spec = json.RawMessage(append([]byte(nil), res.Spec...))
-	if res.Status.Observed != nil {
-		cp.Status.Observed = make(map[string]string, len(res.Status.Observed))
-		for k, v := range res.Status.Observed {
-			cp.Status.Observed[k] = v
-		}
-	}
+	cp.Status = copyStatus(res.Status)
 	return &cp
+}
+
+// copyStatus returns a Status whose Observed map is a fresh copy, so the
+// result shares no mutable reference with the input.
+func copyStatus(status api.Status) api.Status {
+	if status.Observed != nil {
+		observed := make(map[string]string, len(status.Observed))
+		for k, v := range status.Observed {
+			observed[k] = v
+		}
+		status.Observed = observed
+	}
+	return status
 }
