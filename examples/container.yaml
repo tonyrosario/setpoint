@@ -1,0 +1,4 @@
+kind: container
+name: web
+spec:
+  image: nginx:alpine
