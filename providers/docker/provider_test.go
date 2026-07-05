@@ -52,6 +52,28 @@ func TestOwnershipLabels(t *testing.T) {
 	}
 }
 
+func TestSpecHashChangesWithSpec(t *testing.T) {
+	a := &api.Resource{Kind: KindContainer, Name: "web", Spec: json.RawMessage(`{"image":"nginx:alpine"}`)}
+	b := &api.Resource{Kind: KindContainer, Name: "web", Spec: json.RawMessage(`{"image":"nginx:1.27"}`)}
+
+	if specHash(a) == specHash(b) {
+		t.Error("different specs produced the same hash")
+	}
+	// Stable for identical spec bytes.
+	a2 := &api.Resource{Kind: KindContainer, Name: "web", Spec: json.RawMessage(`{"image":"nginx:alpine"}`)}
+	if specHash(a) != specHash(a2) {
+		t.Error("identical specs produced different hashes")
+	}
+}
+
+func TestOwnershipLabelsIncludeSpecHash(t *testing.T) {
+	res := &api.Resource{Kind: KindContainer, Name: "web", Spec: json.RawMessage(`{"image":"nginx"}`)}
+	labels := ownershipLabels(res)
+	if labels[labelSpecHash] != specHash(res) {
+		t.Errorf("spec-hash label = %q, want %q", labels[labelSpecHash], specHash(res))
+	}
+}
+
 func TestContainerName(t *testing.T) {
 	res := &api.Resource{Kind: KindContainer, Name: "web"}
 	if got := containerName(res); got != "setpoint-web" {

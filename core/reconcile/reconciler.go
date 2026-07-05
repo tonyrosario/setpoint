@@ -169,7 +169,8 @@ func (r *Reconciler) converge(ctx context.Context, res *api.Resource) api.Status
 		return api.Status{Phase: api.PhaseError, Message: fmt.Sprintf("observe: %v", err)}
 	}
 
-	if !obs.Exists {
+	switch {
+	case !obs.Exists:
 		r.log.Info("creating", "kind", res.Kind, "name", res.Name)
 		if err := p.Create(ctx, res); err != nil {
 			return api.Status{Phase: api.PhaseError, Message: fmt.Sprintf("create: %v", err)}
@@ -178,14 +179,27 @@ func (r *Reconciler) converge(ctx context.Context, res *api.Resource) api.Status
 		if err != nil {
 			return api.Status{Phase: api.PhaseCreating, Message: fmt.Sprintf("created; observe: %v", err)}
 		}
+	case !obs.UpToDate:
+		// The Substrate object exists but no longer matches Spec; converge
+		// it (for Docker, delete-and-recreate).
+		r.log.Info("updating", "kind", res.Kind, "name", res.Name)
+		if err := p.Update(ctx, res); err != nil {
+			return api.Status{Phase: api.PhaseError, Message: fmt.Sprintf("update: %v", err)}
+		}
+		obs, err = p.Observe(ctx, res)
+		if err != nil {
+			return api.Status{Phase: api.PhaseCreating, Message: fmt.Sprintf("updated; observe: %v", err)}
+		}
 	}
 
+	// Ready means the object both exists-and-runs and matches Spec.
+	ready := obs.Ready && obs.UpToDate
 	status := api.Status{
-		Ready:    obs.Ready,
+		Ready:    ready,
 		Message:  obs.Message,
 		Observed: obs.Details,
 	}
-	if obs.Ready {
+	if ready {
 		status.Phase = api.PhaseReady
 	} else {
 		status.Phase = api.PhaseCreating

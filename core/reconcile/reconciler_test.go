@@ -13,15 +13,18 @@ import (
 	"github.com/tonyrosario/setpoint/core/store"
 )
 
-// fakeProvider scripts Observe/Create/Delete behavior for one kind.
+// fakeProvider scripts Observe/Create/Update/Delete behavior for one kind.
 type fakeProvider struct {
 	kind       string
 	exists     bool
 	ready      bool
+	upToDate   bool
 	observeErr error
 	createErr  error
+	updateErr  error
 	deleteErr  error
 	created    int
+	updated    int
 	deleted    int
 }
 
@@ -32,9 +35,10 @@ func (f *fakeProvider) Observe(ctx context.Context, res *api.Resource) (provider
 		return provider.Observation{}, f.observeErr
 	}
 	return provider.Observation{
-		Exists:  f.exists,
-		Ready:   f.ready,
-		Details: map[string]string{"fake": "yes"},
+		Exists:   f.exists,
+		Ready:    f.ready,
+		UpToDate: f.upToDate,
+		Details:  map[string]string{"fake": "yes"},
 	}, nil
 }
 
@@ -45,10 +49,20 @@ func (f *fakeProvider) Create(ctx context.Context, res *api.Resource) error {
 	f.created++
 	f.exists = true
 	f.ready = true
+	f.upToDate = true
 	return nil
 }
 
-func (f *fakeProvider) Update(ctx context.Context, res *api.Resource) error { return nil }
+func (f *fakeProvider) Update(ctx context.Context, res *api.Resource) error {
+	if f.updateErr != nil {
+		return f.updateErr
+	}
+	f.updated++
+	f.exists = true
+	f.ready = true
+	f.upToDate = true
+	return nil
+}
 
 func (f *fakeProvider) Delete(ctx context.Context, res *api.Resource) error {
 	if f.deleteErr != nil {
@@ -108,15 +122,15 @@ func TestCreatesWhenAbsent(t *testing.T) {
 }
 
 func TestNoOpWhenPresent(t *testing.T) {
-	fake := &fakeProvider{kind: "container", exists: true, ready: true}
+	fake := &fakeProvider{kind: "container", exists: true, ready: true, upToDate: true}
 	rec, st := newTest(fake)
 	putContainer(t, st, "web")
 
 	rec.sweep(context.Background())
 	rec.sweep(context.Background())
 
-	if fake.created != 0 {
-		t.Fatalf("created = %d, want 0 (level-triggered no-op)", fake.created)
+	if fake.created != 0 || fake.updated != 0 {
+		t.Fatalf("created=%d updated=%d, want 0/0 (level-triggered no-op)", fake.created, fake.updated)
 	}
 	if got := status(t, st, "web"); !got.Ready {
 		t.Errorf("status = %+v, want Ready", got)
@@ -124,7 +138,8 @@ func TestNoOpWhenPresent(t *testing.T) {
 }
 
 func TestExistsButNotReady(t *testing.T) {
-	fake := &fakeProvider{kind: "container", exists: true, ready: false}
+	// Right spec (upToDate), but not running yet — e.g. still starting.
+	fake := &fakeProvider{kind: "container", exists: true, ready: false, upToDate: true}
 	rec, st := newTest(fake)
 	putContainer(t, st, "web")
 
@@ -133,6 +148,42 @@ func TestExistsButNotReady(t *testing.T) {
 	got := status(t, st, "web")
 	if got.Ready || got.Phase != api.PhaseCreating {
 		t.Errorf("status = %+v, want not-ready Creating", got)
+	}
+	if fake.updated != 0 {
+		t.Errorf("updated = %d, want 0 (up-to-date container must not be recreated)", fake.updated)
+	}
+}
+
+func TestUpdatesWhenNotUpToDate(t *testing.T) {
+	// Container exists and runs, but does not match Spec → must be updated.
+	fake := &fakeProvider{kind: "container", exists: true, ready: true, upToDate: false}
+	rec, st := newTest(fake)
+	putContainer(t, st, "web")
+
+	rec.sweep(context.Background())
+
+	if fake.updated != 1 {
+		t.Fatalf("updated = %d, want 1", fake.updated)
+	}
+	if fake.created != 0 {
+		t.Errorf("created = %d, want 0 (existing container is updated, not created)", fake.created)
+	}
+	got := status(t, st, "web")
+	if !got.Ready || got.Phase != api.PhaseReady {
+		t.Errorf("status = %+v, want Ready after update", got)
+	}
+}
+
+func TestUpdateErrorSetsErrorPhase(t *testing.T) {
+	fake := &fakeProvider{kind: "container", exists: true, ready: true, upToDate: false,
+		updateErr: errors.New("recreate failed")}
+	rec, st := newTest(fake)
+	putContainer(t, st, "web")
+
+	rec.sweep(context.Background())
+
+	if got := status(t, st, "web"); got.Phase != api.PhaseError {
+		t.Errorf("status = %+v, want Error", got)
 	}
 }
 

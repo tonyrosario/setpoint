@@ -6,6 +6,8 @@ package docker
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -23,10 +25,11 @@ const (
 	// KindContainer is the resource kind this Provider owns.
 	KindContainer = "container"
 
-	labelOwner = "setpoint.io/owner"
-	labelName  = "setpoint.io/resource-name"
-	labelKind  = "setpoint.io/resource-kind"
-	ownerValue = "setpoint"
+	labelOwner    = "setpoint.io/owner"
+	labelName     = "setpoint.io/resource-name"
+	labelKind     = "setpoint.io/resource-kind"
+	labelSpecHash = "setpoint.io/spec-hash"
+	ownerValue    = "setpoint"
 )
 
 // containerSpec is the decoded Spec for the container kind. M0 slice 1 is
@@ -81,16 +84,21 @@ func (p *Provider) Observe(ctx context.Context, res *api.Resource) (provider.Obs
 
 	c := list[0]
 	running := c.State == container.StateRunning
+	upToDate := c.Labels[labelSpecHash] == specHash(res)
 	obs := provider.Observation{
-		Exists: true,
-		Ready:  running,
+		Exists:   true,
+		Ready:    running,
+		UpToDate: upToDate,
 		Details: map[string]string{
 			"containerId": shortID(c.ID),
 			"image":       c.Image,
 			"state":       string(c.State),
 		},
 	}
-	if !running {
+	switch {
+	case !upToDate:
+		obs.Message = "container does not match spec; will recreate"
+	case !running:
 		obs.Message = fmt.Sprintf("container exists but is %s", c.State)
 	}
 	return obs, nil
@@ -131,10 +139,17 @@ func (p *Provider) Create(ctx context.Context, res *api.Resource) error {
 	return nil
 }
 
-// Update converges an existing container toward Spec. Out of scope for M0
-// slice 1 (happy path only); slice 3 implements delete-and-recreate.
+// Update converges an existing container toward Spec by delete-and-recreate.
+// Docker cannot patch a container's image/env/ports in place, so the only
+// honest convergence is to remove the stale container and create a fresh one
+// (which re-stamps the current spec-hash label). Idempotent and crash-safe:
+// a crash between Delete and Create leaves no owned container, which the next
+// reconcile pass repairs via Create.
 func (p *Provider) Update(ctx context.Context, res *api.Resource) error {
-	return fmt.Errorf("container update not implemented (M0 slice 3)")
+	if err := p.Delete(ctx, res); err != nil {
+		return err
+	}
+	return p.Create(ctx, res)
 }
 
 // Delete force-removes the owned container(s). Idempotent: a resource whose
@@ -170,10 +185,20 @@ func decodeSpec(res *api.Resource) (containerSpec, error) {
 
 func ownershipLabels(res *api.Resource) map[string]string {
 	return map[string]string{
-		labelOwner: ownerValue,
-		labelName:  res.Name,
-		labelKind:  res.Kind,
+		labelOwner:    ownerValue,
+		labelName:     res.Name,
+		labelKind:     res.Kind,
+		labelSpecHash: specHash(res),
 	}
+}
+
+// specHash fingerprints the resource's Spec. A running container carries the
+// hash of the Spec it was created from; when the desired Spec's hash differs,
+// the container is out of date and gets recreated. This detects any Spec
+// change uniformly, without field-by-field comparison against the Substrate.
+func specHash(res *api.Resource) string {
+	sum := sha256.Sum256(res.Spec)
+	return hex.EncodeToString(sum[:8])
 }
 
 // containerName gives the Substrate object a predictable, prefixed name.
