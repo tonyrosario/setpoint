@@ -196,9 +196,21 @@ func ownershipLabels(res *api.Resource) map[string]string {
 // hash of the Spec it was created from; when the desired Spec's hash differs,
 // the container is out of date and gets recreated. This detects any Spec
 // change uniformly, without field-by-field comparison against the Substrate.
+//
+// The Spec is canonicalized before hashing so that semantically identical
+// Specs (differing only in key order or whitespace) hash identically — only
+// a real Spec change should trigger a recreate. Invalid JSON falls back to
+// the raw bytes.
 func specHash(res *api.Resource) string {
-	sum := sha256.Sum256(res.Spec)
-	return hex.EncodeToString(sum[:8])
+	canonical := []byte(res.Spec)
+	var v any
+	if json.Unmarshal(res.Spec, &v) == nil {
+		if b, err := json.Marshal(v); err == nil {
+			canonical = b
+		}
+	}
+	sum := sha256.Sum256(canonical)
+	return hex.EncodeToString(sum[:])
 }
 
 // containerName gives the Substrate object a predictable, prefixed name.
