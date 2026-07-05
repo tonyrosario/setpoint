@@ -40,6 +40,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("PUT /v1/{kind}/{name}", s.put)
 	mux.HandleFunc("GET /v1/{kind}/{name}", s.get)
 	mux.HandleFunc("GET /v1/{kind}", s.list)
+	mux.HandleFunc("DELETE /v1/{kind}/{name}", s.delete)
 	return mux
 }
 
@@ -104,6 +105,30 @@ func (s *Server) get(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, res)
+}
+
+// delete marks a resource for deletion and returns 202. Removal is
+// declarative and async (ADR-0007): the reconciler tears down the Substrate
+// object and then removes the resource; the caller observes progress via GET
+// (Phase Deleting) until the resource disappears.
+func (s *Server) delete(w http.ResponseWriter, r *http.Request) {
+	kind, name := kindParam(r), r.PathValue("name")
+	err := s.store.MarkForDeletion(r.Context(), kind, name)
+	if errors.Is(err, store.ErrNotFound) {
+		httpError(w, http.StatusNotFound, "not found")
+		return
+	}
+	if err != nil {
+		httpError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	s.nudge()
+
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusAccepted)
+	json.NewEncoder(w).Encode(map[string]string{
+		"kind": kind, "name": name, "status": "deleting",
+	})
 }
 
 func (s *Server) list(w http.ResponseWriter, r *http.Request) {

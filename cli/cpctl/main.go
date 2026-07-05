@@ -32,6 +32,8 @@ func main() {
 		err = apply(os.Args[2:])
 	case "get":
 		err = get(os.Args[2:])
+	case "delete":
+		err = deleteCmd(os.Args[2:])
 	default:
 		usage()
 	}
@@ -45,6 +47,7 @@ func usage() {
 	fmt.Fprintln(os.Stderr, `usage:
   cpctl apply -f <file.yaml>   apply a Resource Definition
   cpctl get <kind> [name]      show resources
+  cpctl delete <kind> <name>   request deletion of a resource
 
 environment:
   SETPOINT_SERVER   API address (default http://127.0.0.1:8080)`)
@@ -128,6 +131,32 @@ func get(args []string) error {
 	default:
 		return fmt.Errorf("usage: cpctl get <kind> [name]")
 	}
+}
+
+func deleteCmd(args []string) error {
+	if len(args) != 2 {
+		return fmt.Errorf("usage: cpctl delete <kind> <name>")
+	}
+	kind, name := args[0], args[1]
+
+	url := fmt.Sprintf("%s/v1/%s/%s", serverURL(), kind, name)
+	req, err := http.NewRequest(http.MethodDelete, url, nil)
+	if err != nil {
+		return err
+	}
+	req.Header.Set("X-Setpoint-Actor", actor())
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusAccepted {
+		return apiError(resp)
+	}
+
+	fmt.Printf("%s/%s deletion requested\n", kind, name)
+	return nil
 }
 
 func getList(kind string) error {

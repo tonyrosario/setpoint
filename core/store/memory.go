@@ -33,6 +33,9 @@ func (m *Memory) Put(ctx context.Context, res *api.Resource) error {
 	if existing, ok := m.items[key(res.Kind, res.Name)]; ok {
 		cp.Status = existing.Status
 		cp.Metadata.CreatedAt = existing.Metadata.CreatedAt
+		// Preserve the deletion mark: re-applying a Spec must not
+		// resurrect a resource already being torn down.
+		cp.Metadata.DeletedAt = existing.Metadata.DeletedAt
 	} else {
 		cp.Metadata.CreatedAt = now
 	}
@@ -77,6 +80,20 @@ func (m *Memory) UpdateStatus(ctx context.Context, kind, name string, status api
 	// entry never shares a map reference with the caller — the same
 	// copy-in/copy-out invariant Put honours via copyResource.
 	res.Status = copyStatus(status)
+	return nil
+}
+
+func (m *Memory) MarkForDeletion(ctx context.Context, kind, name string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	res, ok := m.items[key(kind, name)]
+	if !ok {
+		return ErrNotFound
+	}
+	if res.Metadata.DeletedAt.IsZero() {
+		res.Metadata.DeletedAt = time.Now().UTC()
+	}
 	return nil
 }
 

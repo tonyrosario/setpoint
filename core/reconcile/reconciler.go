@@ -90,11 +90,68 @@ func (r *Reconciler) sweep(ctx context.Context) {
 }
 
 // reconcile converges a single resource and records what it saw in Status.
+// A resource marked for deletion takes the removal path instead of the
+// convergence path — otherwise we would recreate the very object we are
+// trying to delete.
 func (r *Reconciler) reconcile(ctx context.Context, res *api.Resource) {
+	if res.IsMarkedForDeletion() {
+		r.reconcileDeletion(ctx, res)
+		return
+	}
 	status := r.converge(ctx, res)
+	r.setStatus(ctx, res, status)
+}
+
+// reconcileDeletion drives a marked resource to removal: delete the
+// Substrate object, then hard-remove the resource from the Store once the
+// Substrate is clean. Idempotent — a resource whose Substrate object is
+// already gone (removed out-of-band, or on an earlier pass) is simply
+// removed from the Store.
+func (r *Reconciler) reconcileDeletion(ctx context.Context, res *api.Resource) {
+	p, ok := r.providers[res.Kind]
+	if !ok {
+		// Nothing can exist in a Substrate we don't manage; drop it.
+		r.removeFromStore(ctx, res)
+		return
+	}
+
+	obs, err := p.Observe(ctx, res)
+	if err != nil {
+		r.setStatus(ctx, res, api.Status{Phase: api.PhaseDeleting, Message: fmt.Sprintf("observe: %v", err)})
+		return
+	}
+
+	if obs.Exists {
+		r.log.Info("deleting", "kind", res.Kind, "name", res.Name)
+		if err := p.Delete(ctx, res); err != nil {
+			r.setStatus(ctx, res, api.Status{Phase: api.PhaseDeleting, Message: fmt.Sprintf("delete: %v", err)})
+			return
+		}
+		// Substrate delete initiated; confirm removal on the next pass.
+		r.setStatus(ctx, res, api.Status{Phase: api.PhaseDeleting, Message: "removing from substrate"})
+		r.Nudge()
+		return
+	}
+
+	// Substrate is clean — remove the resource itself.
+	r.removeFromStore(ctx, res)
+}
+
+func (r *Reconciler) setStatus(ctx context.Context, res *api.Resource, status api.Status) {
 	status.ObservedAt = time.Now().UTC()
 	if err := r.store.UpdateStatus(ctx, res.Kind, res.Name, status); err != nil && err != store.ErrNotFound {
 		r.log.Error("update status", "kind", res.Kind, "name", res.Name, "error", err)
+	}
+}
+
+func (r *Reconciler) removeFromStore(ctx context.Context, res *api.Resource) {
+	switch err := r.store.Delete(ctx, res.Kind, res.Name); {
+	case err == nil:
+		r.log.Info("deleted", "kind", res.Kind, "name", res.Name)
+	case err == store.ErrNotFound:
+		// Already absent (removed out-of-band or on a prior pass); nothing to log.
+	default:
+		r.log.Error("delete resource", "kind", res.Kind, "name", res.Name, "error", err)
 	}
 }
 

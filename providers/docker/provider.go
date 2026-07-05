@@ -137,10 +137,24 @@ func (p *Provider) Update(ctx context.Context, res *api.Resource) error {
 	return fmt.Errorf("container update not implemented (M0 slice 3)")
 }
 
-// Delete removes the container. Out of scope for M0 slice 1; slice 2
-// implements it.
+// Delete force-removes the owned container(s). Idempotent: a resource whose
+// container is already gone returns nil. Only containers carrying this
+// control plane's ownership labels are ever touched.
 func (p *Provider) Delete(ctx context.Context, res *api.Resource) error {
-	return fmt.Errorf("container delete not implemented (M0 slice 2)")
+	list, err := p.cli.ContainerList(ctx, container.ListOptions{
+		All:     true,
+		Filters: ownedBy(res),
+	})
+	if err != nil {
+		return fmt.Errorf("list containers: %w", err)
+	}
+	for _, c := range list {
+		// Force stops-and-removes a running container in one call.
+		if err := p.cli.ContainerRemove(ctx, c.ID, container.RemoveOptions{Force: true}); err != nil {
+			return fmt.Errorf("remove container %s: %w", shortID(c.ID), err)
+		}
+	}
+	return nil
 }
 
 func decodeSpec(res *api.Resource) (containerSpec, error) {
