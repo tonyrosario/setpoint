@@ -31,6 +31,12 @@ type Store interface {
 	// UpdateStatus overwrites the resource's Status, or ErrNotFound.
 	UpdateStatus(ctx context.Context, kind, name string, status api.Status) error
 
-	// Delete removes the resource, or ErrNotFound.
+	// MarkForDeletion sets the resource's deletion mark (idempotent), or
+	// ErrNotFound. The resource remains readable until the reconciler
+	// removes it via Delete.
+	MarkForDeletion(ctx context.Context, kind, name string) error
+
+	// Delete hard-removes the resource, or ErrNotFound. Called by the
+	// reconciler once the Substrate object is gone.
 	Delete(ctx context.Context, kind, name string) error
 }

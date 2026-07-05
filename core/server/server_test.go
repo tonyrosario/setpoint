@@ -126,6 +126,43 @@ func TestGetReturnsSpecAndStatus(t *testing.T) {
 	}
 }
 
+func TestDeleteMarksAndAccepts(t *testing.T) {
+	srv, st, nudges := newTestServer(t)
+	doPut(t, srv.URL+"/v1/containers/web", `{"spec":{"image":"nginx"}}`, "")
+	*nudges = 0 // reset the PUT's nudge
+
+	req, _ := http.NewRequest(http.MethodDelete, srv.URL+"/v1/containers/web", nil)
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusAccepted {
+		t.Fatalf("status = %d, want 202", resp.StatusCode)
+	}
+	if *nudges != 1 {
+		t.Errorf("nudges = %d, want 1", *nudges)
+	}
+
+	res, _ := st.Get(context.Background(), "container", "web")
+	if !res.IsMarkedForDeletion() {
+		t.Error("resource not marked for deletion after DELETE")
+	}
+}
+
+func TestDeleteNotFound(t *testing.T) {
+	srv, _, _ := newTestServer(t)
+	req, _ := http.NewRequest(http.MethodDelete, srv.URL+"/v1/containers/nope", nil)
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusNotFound {
+		t.Fatalf("status = %d, want 404", resp.StatusCode)
+	}
+}
+
 func TestListEmptyIsEmptyArray(t *testing.T) {
 	srv, _, _ := newTestServer(t)
 	resp, err := http.Get(srv.URL + "/v1/containers")

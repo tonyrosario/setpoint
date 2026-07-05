@@ -80,6 +80,20 @@ func (m *Memory) UpdateStatus(ctx context.Context, kind, name string, status api
 	return nil
 }
 
+func (m *Memory) MarkForDeletion(ctx context.Context, kind, name string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	res, ok := m.items[key(kind, name)]
+	if !ok {
+		return ErrNotFound
+	}
+	if res.Metadata.DeletedAt.IsZero() {
+		res.Metadata.DeletedAt = time.Now().UTC()
+	}
+	return nil
+}
+
 func (m *Memory) Delete(ctx context.Context, kind, name string) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()

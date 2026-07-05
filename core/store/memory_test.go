@@ -130,6 +130,37 @@ func TestUpdateStatusCopiesObserved(t *testing.T) {
 	}
 }
 
+func TestMarkForDeletion(t *testing.T) {
+	m := NewMemory()
+	ctx := context.Background()
+	m.Put(ctx, testResource("web"))
+
+	if err := m.MarkForDeletion(ctx, "container", "web"); err != nil {
+		t.Fatalf("mark: %v", err)
+	}
+	got, _ := m.Get(ctx, "container", "web")
+	if !got.IsMarkedForDeletion() {
+		t.Fatal("resource not marked for deletion")
+	}
+	first := got.Metadata.DeletedAt
+
+	// Marking again is idempotent — the timestamp must not move.
+	if err := m.MarkForDeletion(ctx, "container", "web"); err != nil {
+		t.Fatalf("second mark: %v", err)
+	}
+	got, _ = m.Get(ctx, "container", "web")
+	if !got.Metadata.DeletedAt.Equal(first) {
+		t.Error("second mark moved DeletedAt")
+	}
+}
+
+func TestMarkForDeletionNotFound(t *testing.T) {
+	m := NewMemory()
+	if err := m.MarkForDeletion(context.Background(), "container", "nope"); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("err = %v, want ErrNotFound", err)
+	}
+}
+
 func TestCopiesAreIsolated(t *testing.T) {
 	m := NewMemory()
 	ctx := context.Background()

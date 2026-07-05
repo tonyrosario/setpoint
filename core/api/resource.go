@@ -21,12 +21,22 @@ type Resource struct {
 	Status   Status          `json:"status"`
 }
 
+// IsMarkedForDeletion reports whether a DELETE has requested this resource
+// be removed. Deletion is declarative and async (ADR-0007): the mark is set,
+// and the reconciler removes the Substrate object, then the resource itself.
+func (r *Resource) IsMarkedForDeletion() bool {
+	return !r.Metadata.DeletedAt.IsZero()
+}
+
 // Metadata records who touched the resource and when. Actor is recorded on
 // every write from day one per ADR-0010; nothing enforces it yet.
 type Metadata struct {
 	Actor     string    `json:"actor,omitempty"`
 	CreatedAt time.Time `json:"createdAt,omitzero"`
 	UpdatedAt time.Time `json:"updatedAt,omitzero"`
+	// DeletedAt marks the resource for deletion. Once set, the reconciler
+	// stops converging Spec and instead drives the resource to removal.
+	DeletedAt time.Time `json:"deletedAt,omitzero"`
 }
 
 // Status is the observed-state half of the resource. It is a cache of what
@@ -49,5 +59,6 @@ const (
 	PhasePending  Phase = "Pending"
 	PhaseCreating Phase = "Creating"
 	PhaseReady    Phase = "Ready"
+	PhaseDeleting Phase = "Deleting"
 	PhaseError    Phase = "Error"
 )
