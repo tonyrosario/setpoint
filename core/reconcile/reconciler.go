@@ -145,11 +145,14 @@ func (r *Reconciler) setStatus(ctx context.Context, res *api.Resource, status ap
 }
 
 func (r *Reconciler) removeFromStore(ctx context.Context, res *api.Resource) {
-	if err := r.store.Delete(ctx, res.Kind, res.Name); err != nil && err != store.ErrNotFound {
+	switch err := r.store.Delete(ctx, res.Kind, res.Name); {
+	case err == nil:
+		r.log.Info("deleted", "kind", res.Kind, "name", res.Name)
+	case err == store.ErrNotFound:
+		// Already absent (removed out-of-band or on a prior pass); nothing to log.
+	default:
 		r.log.Error("delete resource", "kind", res.Kind, "name", res.Name, "error", err)
-		return
 	}
-	r.log.Info("deleted", "kind", res.Kind, "name", res.Name)
 }
 
 func (r *Reconciler) converge(ctx context.Context, res *api.Resource) api.Status {

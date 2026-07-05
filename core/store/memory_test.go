@@ -154,6 +154,24 @@ func TestMarkForDeletion(t *testing.T) {
 	}
 }
 
+func TestPutPreservesDeletionMark(t *testing.T) {
+	m := NewMemory()
+	ctx := context.Background()
+	m.Put(ctx, testResource("web"))
+	if err := m.MarkForDeletion(ctx, "container", "web"); err != nil {
+		t.Fatalf("mark: %v", err)
+	}
+
+	// Re-applying the Spec must NOT clear the deletion mark — otherwise the
+	// reconciler would resurrect a resource already being torn down.
+	m.Put(ctx, testResource("web"))
+
+	got, _ := m.Get(ctx, "container", "web")
+	if !got.IsMarkedForDeletion() {
+		t.Error("re-applying Spec cleared the deletion mark")
+	}
+}
+
 func TestMarkForDeletionNotFound(t *testing.T) {
 	m := NewMemory()
 	if err := m.MarkForDeletion(context.Background(), "container", "nope"); !errors.Is(err, ErrNotFound) {

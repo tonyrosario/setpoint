@@ -33,6 +33,9 @@ func (m *Memory) Put(ctx context.Context, res *api.Resource) error {
 	if existing, ok := m.items[key(res.Kind, res.Name)]; ok {
 		cp.Status = existing.Status
 		cp.Metadata.CreatedAt = existing.Metadata.CreatedAt
+		// Preserve the deletion mark: re-applying a Spec must not
+		// resurrect a resource already being torn down.
+		cp.Metadata.DeletedAt = existing.Metadata.DeletedAt
 	} else {
 		cp.Metadata.CreatedAt = now
 	}
