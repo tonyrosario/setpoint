@@ -13,10 +13,16 @@ import (
 // Details are string key/values (container ID, state, ...) that the
 // reconciler copies verbatim into Status.Observed.
 type Observation struct {
-	Exists  bool
-	Ready   bool
-	Message string
-	Details map[string]string
+	// Exists reports whether a Substrate object for this resource is present.
+	Exists bool
+	// Ready reports whether the Substrate object is healthy/running.
+	Ready bool
+	// UpToDate reports whether the existing Substrate object matches the
+	// resource's current Spec. When false, the reconciler calls Update to
+	// converge it. Meaningless when Exists is false.
+	UpToDate bool
+	Message  string
+	Details  map[string]string
 }
 
 // Provider gives the core the ability to observe and mutate one kind of
