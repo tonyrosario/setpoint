@@ -15,9 +15,9 @@ import (
 // and API never couple to any resource shape (ADR-0004); Providers decode
 // the kinds they own.
 type Resource struct {
-	Kind     string          `json:"kind"`
-	Name     string          `json:"name"`
-	Metadata Metadata        `json:"metadata"`
+	Kind     string   `json:"kind"`
+	Name     string   `json:"name"`
+	Metadata Metadata `json:"metadata"`
 	// References name other resources' observed Status values this
 	// resource depends on (ADR-0012). Envelope structure, not Spec: the
 	// core resolves them generically and never parses Spec to do so.
