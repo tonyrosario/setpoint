@@ -22,6 +22,24 @@ func TestDecodeSpec(t *testing.T) {
 	}
 }
 
+func TestDecodeSpecWithNetwork(t *testing.T) {
+	// By the time a Spec reaches the provider, any $(ref:...) token has
+	// already been substituted by core (ADR-0012) — the provider just sees
+	// a network ID.
+	res := &api.Resource{
+		Kind: KindContainer,
+		Name: "web",
+		Spec: json.RawMessage(`{"image":"nginx:alpine","network":"abc123def456"}`),
+	}
+	spec, err := decodeSpec(res)
+	if err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if spec.Network != "abc123def456" {
+		t.Errorf("network = %q", spec.Network)
+	}
+}
+
 func TestDecodeSpecRequiresImage(t *testing.T) {
 	res := &api.Resource{Kind: KindContainer, Name: "web", Spec: json.RawMessage(`{}`)}
 	if _, err := decodeSpec(res); err == nil {

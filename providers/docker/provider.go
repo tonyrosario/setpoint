@@ -32,10 +32,14 @@ const (
 	ownerValue    = "setpoint"
 )
 
-// containerSpec is the decoded Spec for the container kind. M0 slice 1 is
-// the minimal happy path: an image to run.
+// containerSpec is the decoded Spec for the container kind: an image to
+// run, and optionally a network to attach to. Network is a Docker network
+// ID or name; when the user wires it via a Reference the core has already
+// substituted the resolved value before this Spec is decoded (ADR-0012) —
+// the provider neither knows nor cares where the value came from.
 type containerSpec struct {
-	Image string `json:"image"`
+	Image   string `json:"image"`
+	Network string `json:"network,omitempty"`
 }
 
 // Provider manages containers through the Docker Engine API.
@@ -122,12 +126,16 @@ func (p *Provider) Create(ctx context.Context, res *api.Resource) error {
 	}
 	reader.Close()
 
+	var hostConfig *container.HostConfig
+	if spec.Network != "" {
+		hostConfig = &container.HostConfig{NetworkMode: container.NetworkMode(spec.Network)}
+	}
 	created, err := p.cli.ContainerCreate(ctx,
 		&container.Config{
 			Image:  spec.Image,
 			Labels: ownershipLabels(res),
 		},
-		nil, nil, nil,
+		hostConfig, nil, nil,
 		containerName(res),
 	)
 	if err != nil {

@@ -27,11 +27,15 @@ type fakeProvider struct {
 	created    int
 	updated    int
 	deleted    int
+	// sawSpec records the Spec bytes the provider was last handed — how
+	// tests observe reference substitution (ADR-0012).
+	sawSpec json.RawMessage
 }
 
 func (f *fakeProvider) Kinds() []string { return []string{f.kind} }
 
 func (f *fakeProvider) Observe(ctx context.Context, res *api.Resource) (provider.Observation, error) {
+	f.sawSpec = res.Spec
 	if f.observeErr != nil {
 		return provider.Observation{}, f.observeErr
 	}

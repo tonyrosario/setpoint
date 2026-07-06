@@ -112,6 +112,13 @@ func copyResource(res *api.Resource) *api.Resource {
 	cp := *res
 	cp.Spec = json.RawMessage(append([]byte(nil), res.Spec...))
 	cp.Status = copyStatus(res.Status)
+	if res.References != nil {
+		refs := make(map[string]api.Reference, len(res.References))
+		for k, v := range res.References {
+			refs[k] = v
+		}
+		cp.References = refs
+	}
 	return &cp
 }
 

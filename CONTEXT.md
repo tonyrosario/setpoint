@@ -53,7 +53,7 @@ A resource that maps 1:1 to something a Provider manages in a Substrate (a Docke
 _Avoid_: managed resource, base resource
 
 **Reference**:
-A field in one resource's Spec that points at another resource's Status field (e.g., a container referencing a network's Docker ID). An unresolvable Reference means the resource is not Ready and will be requeued — never an error. References are how ordering emerges without a DAG executor.
+A named entry in one resource's envelope (a sibling of Spec, not inside it) that points at another resource's Status field (e.g., a container referencing a network's Docker ID). Written only by the user, like Spec. An unresolvable Reference means the resource is not Ready and will be requeued — never an error. References are how ordering emerges without a DAG executor.
 _Avoid_: dependency, link, DependsOn
 
 **Ready**:

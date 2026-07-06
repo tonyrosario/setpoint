@@ -69,10 +69,12 @@ func actor() string {
 }
 
 // applyDoc is the Resource Definition file shape: desired state only.
+// References (ADR-0012) ride alongside Spec, exactly as in the envelope.
 type applyDoc struct {
-	Kind string         `yaml:"kind"`
-	Name string         `yaml:"name"`
-	Spec map[string]any `yaml:"spec"`
+	Kind       string                   `yaml:"kind"`
+	Name       string                   `yaml:"name"`
+	References map[string]api.Reference `yaml:"references"`
+	Spec       map[string]any           `yaml:"spec"`
 }
 
 func apply(args []string) error {
@@ -92,11 +94,11 @@ func apply(args []string) error {
 		return fmt.Errorf("%s: kind, name, and spec are all required", args[1])
 	}
 
-	spec, err := json.Marshal(doc.Spec)
-	if err != nil {
-		return err
+	payload := map[string]any{"spec": doc.Spec}
+	if len(doc.References) > 0 {
+		payload["references"] = doc.References
 	}
-	body, err := json.Marshal(map[string]json.RawMessage{"spec": spec})
+	body, err := json.Marshal(payload)
 	if err != nil {
 		return err
 	}

@@ -7,6 +7,7 @@ package server
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"strings"
 
@@ -48,14 +49,50 @@ func (s *Server) Handler() http.Handler {
 // lowercase singular. "/v1/containers/web" and "/v1/container/web" address
 // the same resource.
 func kindParam(r *http.Request) string {
-	kind := strings.ToLower(r.PathValue("kind"))
-	return strings.TrimSuffix(kind, "s")
+	return normalizeKind(r.PathValue("kind"))
+}
+
+// normalizeKind lowercases and singularizes a kind, so "Networks" and
+// "network" address the same thing whether they arrive in a URL or a
+// reference declaration.
+func normalizeKind(kind string) string {
+	return strings.TrimSuffix(strings.ToLower(kind), "s")
 }
 
 // putBody is what clients send: desired state only. Kind and name come from
 // the URL; Status is never writable through the API (ADR-0004).
 type putBody struct {
-	Spec json.RawMessage `json:"spec"`
+	Spec       json.RawMessage          `json:"spec"`
+	References map[string]api.Reference `json:"references,omitempty"`
+}
+
+// validateReferences checks the references block against the Spec it
+// arrives with (ADR-0012) and returns the normalized block. Malformed input
+// is a 400-class error — unlike an unresolvable reference at reconcile
+// time, which is never an error. Rules: every reference names a kind, name,
+// and field; every $(ref:name) token in the Spec names a declared
+// reference. Declared-but-unused references are allowed.
+func validateReferences(refs map[string]api.Reference, spec []byte) (map[string]api.Reference, error) {
+	var normalized map[string]api.Reference
+	if len(refs) > 0 {
+		normalized = make(map[string]api.Reference, len(refs))
+		for name, ref := range refs {
+			if !api.ValidReferenceName(name) {
+				return nil, fmt.Errorf("reference %q: name must match [A-Za-z0-9_.-]+ so a $(ref:...) token can address it", name)
+			}
+			if ref.Kind == "" || ref.Name == "" || ref.Field == "" {
+				return nil, fmt.Errorf("reference %q: kind, name, and field are all required", name)
+			}
+			ref.Kind = normalizeKind(ref.Kind)
+			normalized[name] = ref
+		}
+	}
+	for _, token := range api.SpecReferenceTokens(spec) {
+		if _, ok := normalized[token]; !ok {
+			return nil, fmt.Errorf("spec token $(ref:%s) does not match any declared reference", token)
+		}
+	}
+	return normalized, nil
 }
 
 func (s *Server) put(w http.ResponseWriter, r *http.Request) {
@@ -69,16 +106,23 @@ func (s *Server) put(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	refs, err := validateReferences(body.References, body.Spec)
+	if err != nil {
+		httpError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+
 	actor := r.Header.Get(actorHeader)
 	if actor == "" {
 		actor = "anonymous"
 	}
 
 	res := &api.Resource{
-		Kind:     kindParam(r),
-		Name:     r.PathValue("name"),
-		Metadata: api.Metadata{Actor: actor},
-		Spec:     body.Spec,
+		Kind:       kindParam(r),
+		Name:       r.PathValue("name"),
+		Metadata:   api.Metadata{Actor: actor},
+		References: refs,
+		Spec:       body.Spec,
 	}
 	if err := s.store.Put(r.Context(), res); err != nil {
 		httpError(w, http.StatusInternalServerError, err.Error())
