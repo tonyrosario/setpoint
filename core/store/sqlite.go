@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net/url"
 	"time"
 
 	"github.com/tonyrosario/setpoint/core/api"
@@ -72,13 +73,23 @@ func NewSQLite(path string) (*SQLite, error) {
 	return s, nil
 }
 
-// dsn builds a modernc DSN that applies the connection pragmas on every open,
+// pragmaQuery is the connection-pragma tail appended to every DSN. Keeping the
+// pragmas in the DSN (not just an init-time Exec) applies them on every open,
 // so they survive even if the pool were to reopen the connection.
+const pragmaQuery = "?_pragma=busy_timeout(5000)" +
+	"&_pragma=journal_mode(WAL)" +
+	"&_pragma=synchronous(NORMAL)"
+
+// dsn builds a modernc DSN for path. The path is percent-encoded into the
+// file: URI so a filename containing URI metacharacters (?, #, %, spaces —
+// all legal on POSIX) can't truncate the URI or inject query parameters ahead
+// of the pragma tail. ":memory:" is SQLite's ephemeral-database token, passed
+// through as-is rather than encoded.
 func dsn(path string) string {
-	return "file:" + path +
-		"?_pragma=busy_timeout(5000)" +
-		"&_pragma=journal_mode(WAL)" +
-		"&_pragma=synchronous(NORMAL)"
+	if path == ":memory:" {
+		return "file::memory:" + pragmaQuery
+	}
+	return "file:" + url.PathEscape(path) + pragmaQuery
 }
 
 func (s *SQLite) init(ctx context.Context) error {

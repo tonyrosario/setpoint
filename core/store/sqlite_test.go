@@ -2,6 +2,7 @@ package store
 
 import (
 	"context"
+	"os"
 	"path/filepath"
 	"testing"
 
@@ -90,6 +91,31 @@ func TestSQLiteRefusesNewerSchema(t *testing.T) {
 
 	if _, err := NewSQLite(path); err == nil {
 		t.Fatal("opened a database with a newer schema version; want refusal")
+	}
+}
+
+// TestSQLiteHandlesSpecialCharPath guards the DSN percent-encoding: a path
+// containing URI metacharacters (a space here) must open at the intended file
+// and still round-trip a resource, not silently truncate the DSN or drop the
+// safety pragmas.
+func TestSQLiteHandlesSpecialCharPath(t *testing.T) {
+	ctx := context.Background()
+	path := filepath.Join(t.TempDir(), "set point #1.db")
+
+	s, err := NewSQLite(path)
+	if err != nil {
+		t.Fatalf("open %q: %v", path, err)
+	}
+	t.Cleanup(func() { s.Close() })
+
+	if err := s.Put(ctx, testResource("web")); err != nil {
+		t.Fatalf("put: %v", err)
+	}
+	if _, err := os.Stat(path); err != nil {
+		t.Errorf("database not created at intended path: %v", err)
+	}
+	if got := mustGet(t, s, "web"); got.Metadata.Actor != "tester" {
+		t.Errorf("round-trip failed on special-char path: %+v", got.Metadata)
 	}
 }
 

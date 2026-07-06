@@ -21,17 +21,30 @@ type storeFactory func(t *testing.T) Store
 func RunStoreConformance(t *testing.T, newStore storeFactory) {
 	t.Helper()
 
+	// get fails the test cleanly instead of letting a buggy implementation's
+	// (nil, err) return panic on the next dereference — the conformance suite
+	// should diagnose a broken Store, not crash on it.
+	get := func(t *testing.T, m Store, name string) *api.Resource {
+		t.Helper()
+		got, err := m.Get(context.Background(), "container", name)
+		if err != nil {
+			t.Fatalf("get %q: %v", name, err)
+		}
+		return got
+	}
+	// mustPut asserts Put succeeds before the test relies on the stored state.
+	mustPut := func(t *testing.T, m Store, res *api.Resource) {
+		t.Helper()
+		if err := m.Put(context.Background(), res); err != nil {
+			t.Fatalf("put %q: %v", res.Name, err)
+		}
+	}
+
 	t.Run("PutGetRoundTrip", func(t *testing.T) {
 		m := newStore(t)
-		ctx := context.Background()
 
-		if err := m.Put(ctx, testResource("web")); err != nil {
-			t.Fatalf("put: %v", err)
-		}
-		got, err := m.Get(ctx, "container", "web")
-		if err != nil {
-			t.Fatalf("get: %v", err)
-		}
+		mustPut(t, m, testResource("web"))
+		got := get(t, m, "web")
 		if got.Metadata.Actor != "tester" {
 			t.Errorf("actor = %q, want tester", got.Metadata.Actor)
 		}
@@ -54,8 +67,8 @@ func RunStoreConformance(t *testing.T, newStore storeFactory) {
 		m := newStore(t)
 		ctx := context.Background()
 
-		m.Put(ctx, testResource("web"))
-		first, _ := m.Get(ctx, "container", "web")
+		mustPut(t, m, testResource("web"))
+		first := get(t, m, "web")
 
 		status := api.Status{Phase: api.PhaseReady, Ready: true}
 		if err := m.UpdateStatus(ctx, "container", "web", status); err != nil {
@@ -64,8 +77,8 @@ func RunStoreConformance(t *testing.T, newStore storeFactory) {
 
 		// Re-applying Spec must not clobber Status (ADR-0004 ownership rule)
 		// or CreatedAt.
-		m.Put(ctx, testResource("web"))
-		got, _ := m.Get(ctx, "container", "web")
+		mustPut(t, m, testResource("web"))
+		got := get(t, m, "web")
 		if !got.Status.Ready {
 			t.Error("re-put clobbered status")
 		}
@@ -85,11 +98,11 @@ func RunStoreConformance(t *testing.T, newStore storeFactory) {
 	t.Run("ListByKind", func(t *testing.T) {
 		m := newStore(t)
 		ctx := context.Background()
-		m.Put(ctx, testResource("a"))
-		m.Put(ctx, testResource("b"))
+		mustPut(t, m, testResource("a"))
+		mustPut(t, m, testResource("b"))
 		other := testResource("c")
 		other.Kind = "network"
-		m.Put(ctx, other)
+		mustPut(t, m, other)
 
 		containers, _ := m.List(ctx, "container")
 		if len(containers) != 2 {
@@ -115,7 +128,7 @@ func RunStoreConformance(t *testing.T, newStore storeFactory) {
 	t.Run("Delete", func(t *testing.T) {
 		m := newStore(t)
 		ctx := context.Background()
-		m.Put(ctx, testResource("web"))
+		mustPut(t, m, testResource("web"))
 
 		if err := m.Delete(ctx, "container", "web"); err != nil {
 			t.Fatalf("delete: %v", err)
@@ -131,7 +144,7 @@ func RunStoreConformance(t *testing.T, newStore storeFactory) {
 	t.Run("UpdateStatusCopiesObserved", func(t *testing.T) {
 		m := newStore(t)
 		ctx := context.Background()
-		m.Put(ctx, testResource("web"))
+		mustPut(t, m, testResource("web"))
 
 		observed := map[string]string{"containerId": "abc123"}
 		if err := m.UpdateStatus(ctx, "container", "web", api.Status{Observed: observed}); err != nil {
@@ -141,7 +154,7 @@ func RunStoreConformance(t *testing.T, newStore storeFactory) {
 		// Mutating the caller's map after the call must not touch stored state.
 		observed["containerId"] = "TAMPERED"
 
-		got, _ := m.Get(ctx, "container", "web")
+		got := get(t, m, "web")
 		if got.Status.Observed["containerId"] != "abc123" {
 			t.Errorf("stored Observed aliased caller's map: got %q", got.Status.Observed["containerId"])
 		}
@@ -149,15 +162,12 @@ func RunStoreConformance(t *testing.T, newStore storeFactory) {
 
 	t.Run("References", func(t *testing.T) {
 		m := newStore(t)
-		ctx := context.Background()
 		res := testResource("web")
 		res.References = map[string]api.Reference{
 			"db": {Kind: "container", Name: "postgres", Field: "address"},
 		}
-		if err := m.Put(ctx, res); err != nil {
-			t.Fatalf("put: %v", err)
-		}
-		got, _ := m.Get(ctx, "container", "web")
+		mustPut(t, m, res)
+		got := get(t, m, "web")
 		ref, ok := got.References["db"]
 		if !ok {
 			t.Fatal("references not persisted")
@@ -170,12 +180,12 @@ func RunStoreConformance(t *testing.T, newStore storeFactory) {
 	t.Run("MarkForDeletion", func(t *testing.T) {
 		m := newStore(t)
 		ctx := context.Background()
-		m.Put(ctx, testResource("web"))
+		mustPut(t, m, testResource("web"))
 
 		if err := m.MarkForDeletion(ctx, "container", "web"); err != nil {
 			t.Fatalf("mark: %v", err)
 		}
-		got, _ := m.Get(ctx, "container", "web")
+		got := get(t, m, "web")
 		if !got.IsMarkedForDeletion() {
 			t.Fatal("resource not marked for deletion")
 		}
@@ -185,7 +195,7 @@ func RunStoreConformance(t *testing.T, newStore storeFactory) {
 		if err := m.MarkForDeletion(ctx, "container", "web"); err != nil {
 			t.Fatalf("second mark: %v", err)
 		}
-		got, _ = m.Get(ctx, "container", "web")
+		got = get(t, m, "web")
 		if !got.Metadata.DeletedAt.Equal(first) {
 			t.Error("second mark moved DeletedAt")
 		}
@@ -194,16 +204,16 @@ func RunStoreConformance(t *testing.T, newStore storeFactory) {
 	t.Run("PutPreservesDeletionMark", func(t *testing.T) {
 		m := newStore(t)
 		ctx := context.Background()
-		m.Put(ctx, testResource("web"))
+		mustPut(t, m, testResource("web"))
 		if err := m.MarkForDeletion(ctx, "container", "web"); err != nil {
 			t.Fatalf("mark: %v", err)
 		}
 
 		// Re-applying the Spec must NOT clear the deletion mark — otherwise the
 		// reconciler would resurrect a resource already being torn down.
-		m.Put(ctx, testResource("web"))
+		mustPut(t, m, testResource("web"))
 
-		got, _ := m.Get(ctx, "container", "web")
+		got := get(t, m, "web")
 		if !got.IsMarkedForDeletion() {
 			t.Error("re-applying Spec cleared the deletion mark")
 		}
@@ -218,13 +228,12 @@ func RunStoreConformance(t *testing.T, newStore storeFactory) {
 
 	t.Run("CopiesAreIsolated", func(t *testing.T) {
 		m := newStore(t)
-		ctx := context.Background()
-		m.Put(ctx, testResource("web"))
+		mustPut(t, m, testResource("web"))
 
-		got, _ := m.Get(ctx, "container", "web")
+		got := get(t, m, "web")
 		got.Spec[0] = 'X' // mutate the returned copy
 
-		again, _ := m.Get(ctx, "container", "web")
+		again := get(t, m, "web")
 		if again.Spec[0] == 'X' {
 			t.Error("mutating a returned resource changed stored state")
 		}
