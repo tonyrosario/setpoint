@@ -65,3 +65,7 @@ Every PR must include:
 Humans merge. Agents do not merge.
 
 Branch protection or repository rulesets must remain the human review gate. If protections appear missing or bypassable by agent credentials, stop and report a blocker instead of proceeding to merge.
+
+## Conventions
+
+See [CONVENTIONS.md](CONVENTIONS.md) for versioning (SemVer; milestones → minor versions) and release (annotated tag + GitHub Release per milestone) conventions before tagging or cutting a release.
