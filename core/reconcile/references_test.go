@@ -27,6 +27,20 @@ func putNetworked(t *testing.T, st store.Store, name string) {
 	}
 }
 
+// reconcileOne reconciles a single resource by key. Reference tests stamp
+// target statuses by hand, and no provider is registered for the target's
+// kind — reconcileAll would visit the target too and overwrite the stamped
+// status with a no-provider Error (in whichever map order List returns), so
+// these tests reconcile only the resource under test.
+func reconcileOne(t *testing.T, rec *Reconciler, kind, name string) {
+	t.Helper()
+	res, err := rec.store.Get(context.Background(), kind, name)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = rec.reconcile(context.Background(), res)
+}
+
 // makeTargetReady stores the referenced network and stamps a Ready status
 // carrying the observed field — resolution reads the Store, not a Provider.
 func makeTargetReady(t *testing.T, st store.Store, networkID string) {
@@ -81,7 +95,7 @@ func TestReferenceTargetNotReadyGates(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	reconcileAll(rec)
+	reconcileOne(t, rec, "container", "web")
 
 	if fake.created != 0 {
 		t.Fatal("provider invoked while target not Ready")
@@ -105,7 +119,7 @@ func TestReferenceFieldUnsetGates(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	reconcileAll(rec)
+	reconcileOne(t, rec, "container", "web")
 
 	got := status(t, st, "web")
 	if got.Phase != api.PhasePending || !strings.Contains(got.Message, `"networkId" not set`) {
@@ -119,7 +133,7 @@ func TestReferenceResolvesAndSubstitutes(t *testing.T) {
 	putNetworked(t, st, "web")
 	makeTargetReady(t, st, "abc123def456")
 
-	reconcileAll(rec)
+	reconcileOne(t, rec, "container", "web")
 
 	if fake.created != 1 {
 		t.Fatalf("created = %d, want 1 (reference resolved)", fake.created)
@@ -151,7 +165,7 @@ func TestReferenceWrongOrderApplyConverges(t *testing.T) {
 	}
 
 	makeTargetReady(t, st, "abc123")
-	reconcileAll(rec) // next pass: resolves and converges
+	reconcileOne(t, rec, "container", "web") // next pass: resolves and converges
 
 	if fake.created != 1 {
 		t.Fatalf("created = %d, want 1 after dependency became Ready", fake.created)
