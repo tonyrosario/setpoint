@@ -37,9 +37,20 @@ type Reference struct {
 	Field string `json:"field"`
 }
 
-// refToken matches $(ref:name) tokens inside Spec string values. Names use
-// the same charset resource names do.
-var refToken = regexp.MustCompile(`\$\(ref:([A-Za-z0-9_.-]+)\)`)
+// refToken matches $(ref:name) tokens inside Spec string values, and
+// refName is the full-string form of the same charset — a declared
+// reference whose name refName rejects could never be addressed by any
+// token, so writes validate names against it up front.
+var (
+	refToken = regexp.MustCompile(`\$\(ref:([A-Za-z0-9_.-]+)\)`)
+	refName  = regexp.MustCompile(`^[A-Za-z0-9_.-]+$`)
+)
+
+// ValidReferenceName reports whether name can be addressed by a
+// $(ref:name) token.
+func ValidReferenceName(name string) bool {
+	return refName.MatchString(name)
+}
 
 // SpecReferenceTokens returns the reference names used by $(ref:name)
 // tokens in spec, in order of appearance (duplicates preserved).

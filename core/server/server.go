@@ -77,6 +77,9 @@ func validateReferences(refs map[string]api.Reference, spec []byte) (map[string]
 	if len(refs) > 0 {
 		normalized = make(map[string]api.Reference, len(refs))
 		for name, ref := range refs {
+			if !api.ValidReferenceName(name) {
+				return nil, fmt.Errorf("reference %q: name must match [A-Za-z0-9_.-]+ so a $(ref:...) token can address it", name)
+			}
 			if ref.Kind == "" || ref.Name == "" || ref.Field == "" {
 				return nil, fmt.Errorf("reference %q: kind, name, and field are all required", name)
 			}

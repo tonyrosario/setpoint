@@ -12,6 +12,7 @@ package reconcile
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"log/slog"
 	"sort"
@@ -256,6 +257,12 @@ func (r *Reconciler) resolveReferences(ctx context.Context, res *api.Resource) (
 
 	cp := *res
 	cp.Spec = api.SubstituteReferences(res.Spec, values)
+	// Defense-in-depth: substitution is escape-safe by construction, but a
+	// malformed splice must never reach a Provider. Unreachable today
+	// (PUT only stores valid JSON); retryable if it ever fires.
+	if !json.Valid(cp.Spec) {
+		return nil, "", fmt.Errorf("substituted spec is not valid JSON")
+	}
 	return &cp, "", nil
 }
 
