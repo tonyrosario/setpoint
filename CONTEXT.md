@@ -40,6 +40,10 @@ _Avoid_: app, component, project
 A Primitive managed by the GitHub Provider: a GitHub repo whose Spec declares it exists and carries the bootstrapped delivery process (labels, templates, project board). Drift in these is repaired by reconciliation.
 _Avoid_: repo scaffold, workspace
 
+**Network**:
+A Primitive managed by the Docker Provider: a Docker network whose Spec declares it should exist (optional driver, default bridge). The first Reference target — dependents gate on its readiness and read its observed Docker ID from Status. A Network with containers still attached cannot be removed; that surfaces as a pending deletion, not a failure.
+_Avoid_: bridge (that's a driver), subnet, VPC
+
 **Composition**:
 A platform-authored resource that maps an abstract kind (e.g., WebService) to a template of primitive resources, with patches carrying abstract Spec fields into primitive Specs. The golden-path mechanism.
 _Avoid_: blueprint, recipe, stack template
