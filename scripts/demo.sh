@@ -70,11 +70,13 @@ owned_network_id() {
 }
 
 # The network ID the owned web container is attached to (empty if absent).
+# Demo containers attach to exactly one network; take the first entry so a
+# surprise second attachment can't produce a concatenated non-ID string.
 attached_network_id() {
   local cid
   cid="$(docker ps -q --filter "label=$OWNER_LABEL" --filter "label=setpoint.io/resource-name=web")"
   [[ -n "$cid" ]] || return 0
-  docker inspect "$cid" --format '{{range .NetworkSettings.Networks}}{{.NetworkID}}{{end}}'
+  docker inspect "$cid" --format '{{range .NetworkSettings.Networks}}{{.NetworkID}}{{"\n"}}{{end}}' | head -n1
 }
 
 # Poll until exactly the given image is the running owned container.
@@ -92,13 +94,14 @@ wait_image() {
 
 # Poll until the resource no longer appears in `cpctl get`.
 wait_gone() {
-  local name="$1" timeout="${2:-30}" i
+  local kind="$1" name="$2" timeout="${3:-30}" i
   for ((i = 0; i < timeout * 2; i++)); do
-    if ! "$BIN/cpctl" get containers 2>/dev/null | awk 'NR>1 {print $2}' | grep -qx "$name"; then
+    if ! "$BIN/cpctl" get "$kind" 2>/dev/null | awk 'NR>1 {print $2}' | grep -qx "$name"; then
       return 0
     fi
     sleep 0.5
   done
+  echo "timed out waiting for $kind/$name to be removed" >&2
   return 1
 }
 
@@ -182,7 +185,7 @@ info "Recovered — fixing the spec resets the backoff and it converges."
 bold "5. Delete — declarative teardown"
 info "\$ cpctl delete container web"
 "$BIN/cpctl" delete container web
-wait_gone web   # reconciler removes the container, then the resource itself
+wait_gone container web   # reconciler removes the container, then the resource itself
 info "Container removed from Docker:"
 docker ps -a --filter "label=$OWNER_LABEL" --format '   {{.Names}}' | grep . || info "   (none — clean)"
 info "Resource removed from the control plane:"
@@ -249,11 +252,8 @@ info "surfaces that as a pending deletion and keeps retrying — not a failure."
 info ""
 info "\$ cpctl delete container web   (remove the dependent; the network follows)"
 "$BIN/cpctl" delete container web
-wait_gone web
-for ((i = 0; i < 60; i++)); do
-  [[ -z "$(owned_network_id)" ]] && break
-  sleep 0.5
-done
+wait_gone container web
+wait_gone network backend
 info "Everything owned is gone from Docker and from the control plane:"
 "$BIN/cpctl" get containers
 "$BIN/cpctl" get networks
