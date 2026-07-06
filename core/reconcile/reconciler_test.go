@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"log/slog"
+	"sync"
 	"testing"
 	"time"
 
@@ -81,6 +82,16 @@ func newTest(p provider.Provider) (*Reconciler, *store.Memory) {
 	return rec, st
 }
 
+// reconcileAll synchronously reconciles every stored resource once. It
+// exercises the reconcile logic directly, without the worker pool — the queue
+// and workers have their own tests in queue_test.go.
+func reconcileAll(rec *Reconciler) {
+	resources, _ := rec.store.List(context.Background(), "")
+	for _, res := range resources {
+		_ = rec.reconcile(context.Background(), res)
+	}
+}
+
 func putContainer(t *testing.T, st store.Store, name string) {
 	t.Helper()
 	err := st.Put(context.Background(), &api.Resource{
@@ -107,7 +118,7 @@ func TestCreatesWhenAbsent(t *testing.T) {
 	rec, st := newTest(fake)
 	putContainer(t, st, "web")
 
-	rec.sweep(context.Background())
+	reconcileAll(rec)
 
 	if fake.created != 1 {
 		t.Fatalf("created = %d, want 1", fake.created)
@@ -126,8 +137,8 @@ func TestNoOpWhenPresent(t *testing.T) {
 	rec, st := newTest(fake)
 	putContainer(t, st, "web")
 
-	rec.sweep(context.Background())
-	rec.sweep(context.Background())
+	reconcileAll(rec)
+	reconcileAll(rec)
 
 	if fake.created != 0 || fake.updated != 0 {
 		t.Fatalf("created=%d updated=%d, want 0/0 (level-triggered no-op)", fake.created, fake.updated)
@@ -143,7 +154,7 @@ func TestExistsButNotReady(t *testing.T) {
 	rec, st := newTest(fake)
 	putContainer(t, st, "web")
 
-	rec.sweep(context.Background())
+	reconcileAll(rec)
 
 	got := status(t, st, "web")
 	if got.Ready || got.Phase != api.PhaseCreating {
@@ -160,7 +171,7 @@ func TestUpdatesWhenNotUpToDate(t *testing.T) {
 	rec, st := newTest(fake)
 	putContainer(t, st, "web")
 
-	rec.sweep(context.Background())
+	reconcileAll(rec)
 
 	if fake.updated != 1 {
 		t.Fatalf("updated = %d, want 1", fake.updated)
@@ -180,7 +191,7 @@ func TestUpdateErrorSetsErrorPhase(t *testing.T) {
 	rec, st := newTest(fake)
 	putContainer(t, st, "web")
 
-	rec.sweep(context.Background())
+	reconcileAll(rec)
 
 	if got := status(t, st, "web"); got.Phase != api.PhaseError {
 		t.Errorf("status = %+v, want Error", got)
@@ -192,7 +203,7 @@ func TestObserveErrorSetsErrorPhase(t *testing.T) {
 	rec, st := newTest(fake)
 	putContainer(t, st, "web")
 
-	rec.sweep(context.Background())
+	reconcileAll(rec)
 
 	got := status(t, st, "web")
 	if got.Phase != api.PhaseError || got.Ready {
@@ -205,7 +216,7 @@ func TestCreateErrorSetsErrorPhase(t *testing.T) {
 	rec, st := newTest(fake)
 	putContainer(t, st, "web")
 
-	rec.sweep(context.Background())
+	reconcileAll(rec)
 
 	got := status(t, st, "web")
 	if got.Phase != api.PhaseError {
@@ -225,7 +236,7 @@ func TestUnknownKindSetsErrorPhase(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	rec.sweep(context.Background())
+	reconcileAll(rec)
 
 	res, _ := st.Get(context.Background(), "network", "net1")
 	if res.Status.Phase != api.PhaseError {
@@ -247,7 +258,7 @@ func TestDeletionRemovesSubstrateThenResource(t *testing.T) {
 	markDeleted(t, st, "web")
 
 	// First pass: substrate object exists → Delete it, stay in store.
-	rec.sweep(context.Background())
+	reconcileAll(rec)
 	if fake.deleted != 1 {
 		t.Fatalf("deleted = %d, want 1", fake.deleted)
 	}
@@ -256,7 +267,7 @@ func TestDeletionRemovesSubstrateThenResource(t *testing.T) {
 	}
 
 	// Second pass: substrate clean → resource removed from store.
-	rec.sweep(context.Background())
+	reconcileAll(rec)
 	if _, err := st.Get(context.Background(), "container", "web"); !errors.Is(err, store.ErrNotFound) {
 		t.Fatalf("resource still present after substrate clean: %v", err)
 	}
@@ -270,7 +281,7 @@ func TestDeletionMarkSkipsConverge(t *testing.T) {
 	putContainer(t, st, "web")
 	markDeleted(t, st, "web")
 
-	rec.sweep(context.Background())
+	reconcileAll(rec)
 
 	if fake.created != 0 {
 		t.Errorf("created = %d, want 0 (marked resource must not be recreated)", fake.created)
@@ -293,10 +304,121 @@ func TestDeletionOfUnknownKindRemovesResource(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	rec.sweep(context.Background())
+	reconcileAll(rec)
 
 	if _, err := st.Get(context.Background(), "network", "net1"); !errors.Is(err, store.ErrNotFound) {
 		t.Errorf("marked resource of unmanaged kind should be dropped: %v", err)
+	}
+}
+
+func TestProcessRequeuesWithBackoffOnError(t *testing.T) {
+	// A reconcile that keeps failing must accumulate per-item backoff.
+	fake := &fakeProvider{kind: "container", observeErr: errors.New("daemon down")}
+	rec, st := newTest(fake)
+	putContainer(t, st, "web")
+
+	key := resourceKey{Kind: "container", Name: "web"}
+	rec.queue.enqueue(key)
+	got, _ := rec.queue.get()
+	rec.process(context.Background(), got) // fails → enqueueRateLimited
+
+	if f := rec.queue.limiter.failures(key); f == 0 {
+		t.Fatal("expected backoff failure count to advance after a failed reconcile")
+	}
+	if got := status(t, st, "web"); got.Phase != api.PhaseError {
+		t.Errorf("status = %+v, want Error", got)
+	}
+}
+
+func TestProcessForgetsOnSuccess(t *testing.T) {
+	fake := &fakeProvider{kind: "container"} // absent → create → ready
+	rec, st := newTest(fake)
+	putContainer(t, st, "web")
+	key := resourceKey{Kind: "container", Name: "web"}
+
+	// Pre-load some failures, then a successful process must reset them.
+	rec.queue.limiter.when(key)
+	rec.queue.limiter.when(key)
+
+	rec.queue.enqueue(key)
+	got, _ := rec.queue.get()
+	rec.process(context.Background(), got)
+
+	if f := rec.queue.limiter.failures(key); f != 0 {
+		t.Fatalf("failures after successful process = %d, want 0 (forget)", f)
+	}
+}
+
+func TestProcessForgetsVanishedResource(t *testing.T) {
+	fake := &fakeProvider{kind: "container"}
+	rec, _ := newTest(fake)
+	// Key for a resource that isn't in the store.
+	key := resourceKey{Kind: "container", Name: "ghost"}
+	rec.queue.enqueue(key)
+	got, _ := rec.queue.get()
+	rec.process(context.Background(), got) // Get → ErrNotFound → forget, no create
+
+	if fake.created != 0 {
+		t.Errorf("created = %d, want 0 (no resource to reconcile)", fake.created)
+	}
+}
+
+func TestRunGracefulShutdown(t *testing.T) {
+	fake := &fakeProvider{kind: "container", exists: true, ready: true, upToDate: true}
+	rec, st := newTest(fake)
+	putContainer(t, st, "web")
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() { rec.Run(ctx); close(done) }()
+
+	rec.Nudge()
+	cancel() // cancel while running
+
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("Run did not return after context cancel")
+	}
+}
+
+// blockingProvider blocks in Observe until its context is cancelled, standing
+// in for a slow external substrate. enterOnce guards the entered signal since
+// the queue may drain a re-marked key a second time during shutdown.
+type blockingProvider struct {
+	kind      string
+	entered   chan struct{}
+	enterOnce sync.Once
+}
+
+func (b *blockingProvider) Kinds() []string { return []string{b.kind} }
+func (b *blockingProvider) Observe(ctx context.Context, res *api.Resource) (provider.Observation, error) {
+	b.enterOnce.Do(func() { close(b.entered) })
+	<-ctx.Done() // block until the reconcile context is cancelled
+	return provider.Observation{}, ctx.Err()
+}
+func (b *blockingProvider) Create(context.Context, *api.Resource) error { return nil }
+func (b *blockingProvider) Update(context.Context, *api.Resource) error { return nil }
+func (b *blockingProvider) Delete(context.Context, *api.Resource) error { return nil }
+
+func TestShutdownCancelsInFlightReconcile(t *testing.T) {
+	fake := &blockingProvider{kind: "container", entered: make(chan struct{})}
+	rec, st := newTest(fake)
+	putContainer(t, st, "web")
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() { rec.Run(ctx); close(done) }()
+
+	rec.Nudge()
+	<-fake.entered // a worker is now blocked inside Observe
+
+	cancel() // must unblock the in-flight reconcile via its context
+
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("Run hung: in-flight reconcile was not cancelled on shutdown")
 	}
 }
 
