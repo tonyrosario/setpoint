@@ -6,6 +6,7 @@ package api
 
 import (
 	"encoding/json"
+	"regexp"
 	"time"
 )
 
@@ -17,8 +18,56 @@ type Resource struct {
 	Kind     string          `json:"kind"`
 	Name     string          `json:"name"`
 	Metadata Metadata        `json:"metadata"`
-	Spec     json.RawMessage `json:"spec"`
-	Status   Status          `json:"status"`
+	// References name other resources' observed Status values this
+	// resource depends on (ADR-0012). Envelope structure, not Spec: the
+	// core resolves them generically and never parses Spec to do so.
+	// Written only by the user, like Spec.
+	References map[string]Reference `json:"references,omitempty"`
+	Spec       json.RawMessage      `json:"spec"`
+	Status     Status               `json:"status"`
+}
+
+// Reference points at a value in another resource's Status.Observed map.
+// It resolves only while the target exists, is Ready, and carries a
+// non-empty value at Field; otherwise the referring resource is not Ready
+// and is requeued — never an error (ADR-0005).
+type Reference struct {
+	Kind  string `json:"kind"`
+	Name  string `json:"name"`
+	Field string `json:"field"`
+}
+
+// refToken matches $(ref:name) tokens inside Spec string values. Names use
+// the same charset resource names do.
+var refToken = regexp.MustCompile(`\$\(ref:([A-Za-z0-9_.-]+)\)`)
+
+// SpecReferenceTokens returns the reference names used by $(ref:name)
+// tokens in spec, in order of appearance (duplicates preserved).
+func SpecReferenceTokens(spec []byte) []string {
+	var names []string
+	for _, m := range refToken.FindAllSubmatch(spec, -1) {
+		names = append(names, string(m[1]))
+	}
+	return names
+}
+
+// SubstituteReferences replaces every $(ref:name) token in spec with
+// values[name], JSON-string-escaped so the splice can never break the
+// document. Tokens whose name has no value are left untouched — callers
+// substitute only once every declared reference has resolved.
+func SubstituteReferences(spec []byte, values map[string]string) json.RawMessage {
+	return refToken.ReplaceAllFunc(spec, func(m []byte) []byte {
+		name := string(refToken.FindSubmatch(m)[1])
+		v, ok := values[name]
+		if !ok {
+			return m
+		}
+		b, err := json.Marshal(v)
+		if err != nil {
+			return m
+		}
+		return b[1 : len(b)-1] // strip the quotes json.Marshal adds
+	})
 }
 
 // IsMarkedForDeletion reports whether a DELETE has requested this resource

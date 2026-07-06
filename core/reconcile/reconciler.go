@@ -14,6 +14,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"sort"
 	"sync"
 	"time"
 
@@ -30,6 +31,10 @@ const (
 	// deletionRequeue is how soon to re-check a resource whose Substrate
 	// object we just asked to be removed (the requeue-after seam).
 	deletionRequeue = 500 * time.Millisecond
+	// referenceRequeue is how soon to re-check a resource waiting on an
+	// unresolvable Reference (ADR-0012). Distinct from the error/backoff
+	// path: waiting on a dependency is expected, not a failure.
+	referenceRequeue = 1 * time.Second
 )
 
 // resourceKey identifies a resource in the queue. Keys, not objects, are
@@ -181,15 +186,77 @@ func (r *Reconciler) process(ctx context.Context, key resourceKey) {
 // reconcile converges a single resource and records what it saw in Status.
 // A resource marked for deletion takes the removal path instead of the
 // convergence path — otherwise we would recreate the very object we are
-// trying to delete. Returns a non-nil error only for unexpected failures the
-// caller should retry with backoff.
+// trying to delete. References resolve before the Provider is involved
+// (ADR-0012); an unresolvable Reference parks the resource as Pending and
+// requeues it — never an error, and never a teardown (ADR-0005). Deletion
+// skips resolution entirely: removing a Substrate object must not be
+// blocked by an unready dependency. Returns a non-nil error only for
+// unexpected failures the caller should retry with backoff.
 func (r *Reconciler) reconcile(ctx context.Context, res *api.Resource) error {
 	if res.IsMarkedForDeletion() {
 		return r.reconcileDeletion(ctx, res)
 	}
-	status, err := r.converge(ctx, res)
+
+	resolved, wait, err := r.resolveReferences(ctx, res)
+	if err != nil {
+		r.setStatus(ctx, res, api.Status{Phase: api.PhaseError, Message: fmt.Sprintf("resolve references: %v", err)})
+		return err
+	}
+	if wait != "" {
+		r.log.Info("waiting on reference", "kind", res.Kind, "name", res.Name, "why", wait)
+		r.setStatus(ctx, res, api.Status{Phase: api.PhasePending, Message: wait})
+		r.queue.enqueueAfter(keyOf(res), referenceRequeue)
+		return nil
+	}
+
+	status, err := r.converge(ctx, resolved)
 	r.setStatus(ctx, res, status)
 	return err
+}
+
+// resolveReferences resolves every declared Reference through the target's
+// Status (ADR-0012). It returns the resource to converge — a copy whose Spec
+// has $(ref:name) tokens substituted when references exist, the original
+// otherwise — or a non-empty wait message when any reference is
+// unresolvable (target missing, not Ready, or field unset), or an error for
+// Store failures, which are retryable faults rather than unready
+// dependencies. References are checked in name order so the reported
+// message is deterministic. The stored resource is never mutated: the
+// Store keeps the user's original Spec bytes, placeholders and all.
+func (r *Reconciler) resolveReferences(ctx context.Context, res *api.Resource) (*api.Resource, string, error) {
+	if len(res.References) == 0 {
+		return res, "", nil
+	}
+
+	names := make([]string, 0, len(res.References))
+	for name := range res.References {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+
+	values := make(map[string]string, len(res.References))
+	for _, name := range names {
+		ref := res.References[name]
+		target, err := r.store.Get(ctx, ref.Kind, ref.Name)
+		if err == store.ErrNotFound {
+			return nil, fmt.Sprintf("waiting for %s/%s: no such resource", ref.Kind, ref.Name), nil
+		}
+		if err != nil {
+			return nil, "", fmt.Errorf("reference %q: %w", name, err)
+		}
+		if !target.Status.Ready {
+			return nil, fmt.Sprintf("waiting for %s/%s: not ready", ref.Kind, ref.Name), nil
+		}
+		v := target.Status.Observed[ref.Field]
+		if v == "" {
+			return nil, fmt.Sprintf("waiting for %s/%s: status field %q not set", ref.Kind, ref.Name, ref.Field), nil
+		}
+		values[name] = v
+	}
+
+	cp := *res
+	cp.Spec = api.SubstituteReferences(res.Spec, values)
+	return &cp, "", nil
 }
 
 // reconcileDeletion drives a marked resource to removal: delete the

@@ -1,0 +1,10 @@
+kind: container
+name: web
+references:
+  net:
+    kind: network
+    name: backend
+    field: networkId
+spec:
+  image: nginx:alpine
+  network: $(ref:net)
