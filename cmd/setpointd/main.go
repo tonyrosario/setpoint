@@ -34,9 +34,14 @@ func main() {
 		log.Error("docker provider", "error", err)
 		os.Exit(1)
 	}
+	dockerNetwork, err := dockerprovider.NewNetwork()
+	if err != nil {
+		log.Error("docker network provider", "error", err)
+		os.Exit(1)
+	}
 
 	st := store.NewMemory()
-	rec := reconcile.New(st, []provider.Provider{docker}, *interval, log)
+	rec := reconcile.New(st, []provider.Provider{docker, dockerNetwork}, *interval, log)
 	srv := server.New(st, rec.Nudge)
 
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
