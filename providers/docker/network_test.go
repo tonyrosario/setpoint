@@ -63,9 +63,12 @@ func TestNetworkProviderKinds(t *testing.T) {
 // unstubbed method is a test bug.
 type fakeNetworkClient struct {
 	client.APIClient
-	networks  []network.Summary
-	removeErr error
-	removed   []string
+	networks   []network.Summary
+	removeErr  error
+	removed    []string
+	createName string
+	createOpts network.CreateOptions
+	createErr  error
 }
 
 func (f *fakeNetworkClient) NetworkList(ctx context.Context, opts network.ListOptions) ([]network.Summary, error) {
@@ -78,6 +81,15 @@ func (f *fakeNetworkClient) NetworkRemove(ctx context.Context, id string) error 
 	}
 	f.removed = append(f.removed, id)
 	return nil
+}
+
+func (f *fakeNetworkClient) NetworkCreate(ctx context.Context, name string, opts network.CreateOptions) (network.CreateResponse, error) {
+	if f.createErr != nil {
+		return network.CreateResponse{}, f.createErr
+	}
+	f.createName = name
+	f.createOpts = opts
+	return network.CreateResponse{ID: "created"}, nil
 }
 
 func networkRes(spec string) *api.Resource {
@@ -167,6 +179,43 @@ func TestNetworkDeleteAttachedContainersIsPending(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "containers attached") {
 		t.Errorf("error %q should explain the pending condition", err)
+	}
+}
+
+func TestNetworkCreateDefaultsDriverAndStampsLabels(t *testing.T) {
+	res := networkRes(`{}`)
+	fake := &fakeNetworkClient{}
+	p := NewNetworkWithClient(fake)
+
+	if err := p.Create(context.Background(), res); err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	if fake.createName != "setpoint-backend" {
+		t.Errorf("created name = %q, want setpoint-backend", fake.createName)
+	}
+	if fake.createOpts.Driver != "bridge" {
+		t.Errorf("driver = %q, want bridge default", fake.createOpts.Driver)
+	}
+	if fake.createOpts.Labels[labelOwner] != ownerValue {
+		t.Errorf("owner label = %q, want %q", fake.createOpts.Labels[labelOwner], ownerValue)
+	}
+	if fake.createOpts.Labels[labelSpecHash] != specHash(res) {
+		t.Errorf("spec-hash label = %q, want %q", fake.createOpts.Labels[labelSpecHash], specHash(res))
+	}
+}
+
+func TestNetworkUpdateDeletesThenRecreates(t *testing.T) {
+	fake := &fakeNetworkClient{networks: []network.Summary{{ID: "stale"}}}
+	p := NewNetworkWithClient(fake)
+
+	if err := p.Update(context.Background(), networkRes(`{"driver":"bridge"}`)); err != nil {
+		t.Fatalf("update: %v", err)
+	}
+	if len(fake.removed) != 1 || fake.removed[0] != "stale" {
+		t.Errorf("removed = %v, want the stale network", fake.removed)
+	}
+	if fake.createName != "setpoint-backend" {
+		t.Error("update did not recreate the network after removal")
 	}
 }
 
