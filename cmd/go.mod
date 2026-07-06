@@ -7,6 +7,7 @@ replace github.com/tonyrosario/setpoint/core => ../core
 replace github.com/tonyrosario/setpoint/providers/docker => ../providers/docker
 
 require (
+	github.com/docker/docker v28.5.2+incompatible
 	github.com/tonyrosario/setpoint/core v0.0.0-00010101000000-000000000000
 	github.com/tonyrosario/setpoint/providers/docker v0.0.0-00010101000000-000000000000
 )
@@ -19,7 +20,6 @@ require (
 	github.com/containerd/errdefs v1.0.0 // indirect
 	github.com/containerd/errdefs/pkg v0.3.0 // indirect
 	github.com/distribution/reference v0.6.0 // indirect
-	github.com/docker/docker v28.5.2+incompatible // indirect
 	github.com/docker/go-connections v0.7.0 // indirect
 	github.com/docker/go-units v0.5.0 // indirect
 	github.com/felixge/httpsnoop v1.0.4 // indirect

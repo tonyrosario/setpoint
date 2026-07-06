@@ -1,0 +1,4 @@
+kind: network
+name: backend
+spec:
+  driver: bridge

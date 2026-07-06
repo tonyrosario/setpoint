@@ -15,6 +15,8 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/docker/docker/client"
+
 	"github.com/tonyrosario/setpoint/core/provider"
 	"github.com/tonyrosario/setpoint/core/reconcile"
 	"github.com/tonyrosario/setpoint/core/server"
@@ -29,14 +31,18 @@ func main() {
 
 	log := slog.New(slog.NewTextHandler(os.Stderr, nil))
 
-	docker, err := dockerprovider.New()
+	// One client serves both Docker providers; main is the composition root
+	// where substrate connections are built and shared.
+	dockerClient, err := client.NewClientWithOpts(client.FromEnv, client.WithAPIVersionNegotiation())
 	if err != nil {
-		log.Error("docker provider", "error", err)
+		log.Error("docker client", "error", err)
 		os.Exit(1)
 	}
+	docker := dockerprovider.NewWithClient(dockerClient)
+	dockerNetwork := dockerprovider.NewNetworkWithClient(dockerClient)
 
 	st := store.NewMemory()
-	rec := reconcile.New(st, []provider.Provider{docker}, *interval, log)
+	rec := reconcile.New(st, []provider.Provider{docker, dockerNetwork}, *interval, log)
 	srv := server.New(st, rec.Nudge)
 
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
