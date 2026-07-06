@@ -1,0 +1,7 @@
+# Same resource as container.yaml (kind + name), but a different image.
+# Re-applying this over container.yaml demonstrates update-by-recreate:
+# the spec-hash changes, so the reconciler replaces the running container.
+kind: container
+name: web
+spec:
+  image: httpd:alpine
