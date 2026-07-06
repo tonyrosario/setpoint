@@ -104,7 +104,7 @@ func (r *Reconciler) Run(ctx context.Context) {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			r.worker()
+			r.worker(ctx)
 		}()
 	}
 	wg.Wait()
@@ -141,24 +141,25 @@ func (r *Reconciler) resync(ctx context.Context) {
 	}
 }
 
-// worker pulls keys and reconciles until the queue shuts down.
-func (r *Reconciler) worker() {
+// worker pulls keys and reconciles until the queue shuts down. ctx is the
+// Run context: cancelling it lets an in-flight reconcile abort its
+// store/provider calls rather than pinning shutdown until they finish.
+func (r *Reconciler) worker(ctx context.Context) {
 	for {
 		key, shutdown := r.queue.get()
 		if shutdown {
 			return
 		}
-		r.process(key)
+		r.process(ctx, key)
 	}
 }
 
 // process reconciles one key: read current state, reconcile, then either
 // forget (success) or requeue with backoff (failure). A key whose resource
 // has vanished from the Store is simply forgotten.
-func (r *Reconciler) process(key resourceKey) {
+func (r *Reconciler) process(ctx context.Context, key resourceKey) {
 	defer r.queue.done(key)
 
-	ctx := context.Background()
 	res, err := r.store.Get(ctx, key.Kind, key.Name)
 	if err == store.ErrNotFound {
 		r.queue.forget(key) // resource gone; nothing to reconcile
@@ -200,8 +201,7 @@ func (r *Reconciler) reconcileDeletion(ctx context.Context, res *api.Resource) e
 	p, ok := r.providers[res.Kind]
 	if !ok {
 		// Nothing can exist in a Substrate we don't manage; drop it.
-		r.removeFromStore(ctx, res)
-		return nil
+		return r.removeFromStore(ctx, res)
 	}
 
 	obs, err := p.Observe(ctx, res)
@@ -223,8 +223,7 @@ func (r *Reconciler) reconcileDeletion(ctx context.Context, res *api.Resource) e
 	}
 
 	// Substrate is clean — remove the resource itself.
-	r.removeFromStore(ctx, res)
-	return nil
+	return r.removeFromStore(ctx, res)
 }
 
 func (r *Reconciler) setStatus(ctx context.Context, res *api.Resource, status api.Status) {
@@ -234,14 +233,19 @@ func (r *Reconciler) setStatus(ctx context.Context, res *api.Resource, status ap
 	}
 }
 
-func (r *Reconciler) removeFromStore(ctx context.Context, res *api.Resource) {
+// removeFromStore hard-removes the resource. A store failure is returned so
+// the caller retries it with backoff, consistent with the Substrate-facing
+// error paths. ErrNotFound is success — the resource is already gone.
+func (r *Reconciler) removeFromStore(ctx context.Context, res *api.Resource) error {
 	switch err := r.store.Delete(ctx, res.Kind, res.Name); {
 	case err == nil:
 		r.log.Info("deleted", "kind", res.Kind, "name", res.Name)
+		return nil
 	case err == store.ErrNotFound:
-		// Already absent (removed out-of-band or on a prior pass); nothing to log.
+		return nil // already absent (removed out-of-band or on a prior pass)
 	default:
 		r.log.Error("delete resource", "kind", res.Kind, "name", res.Name, "error", err)
+		return err
 	}
 }
 

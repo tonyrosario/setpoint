@@ -29,6 +29,11 @@ type rateLimiter[K comparable] interface {
 
 // exponentialRateLimiter is per-item exponential backoff: delay = base·2^failures,
 // capped at max. Mirrors client-go's ItemExponentialFailureRateLimiter defaults.
+//
+// TODO(setpoint#8): the fails map is only pruned by forget(); a permanently
+// failing key retains its entry indefinitely. Bounded by the operator's own
+// resource count in the single-user sandbox, but needs an LRU/TTL bound before
+// multi-user (ADR-0010) lets untrusted callers create high-cardinality keys.
 type exponentialRateLimiter[K comparable] struct {
 	mu    sync.Mutex
 	fails map[K]int

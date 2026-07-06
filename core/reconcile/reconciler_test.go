@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"log/slog"
+	"sync"
 	"testing"
 	"time"
 
@@ -319,7 +320,7 @@ func TestProcessRequeuesWithBackoffOnError(t *testing.T) {
 	key := resourceKey{Kind: "container", Name: "web"}
 	rec.queue.enqueue(key)
 	got, _ := rec.queue.get()
-	rec.process(got) // fails → enqueueRateLimited
+	rec.process(context.Background(), got) // fails → enqueueRateLimited
 
 	if f := rec.queue.limiter.failures(key); f == 0 {
 		t.Fatal("expected backoff failure count to advance after a failed reconcile")
@@ -341,7 +342,7 @@ func TestProcessForgetsOnSuccess(t *testing.T) {
 
 	rec.queue.enqueue(key)
 	got, _ := rec.queue.get()
-	rec.process(got)
+	rec.process(context.Background(), got)
 
 	if f := rec.queue.limiter.failures(key); f != 0 {
 		t.Fatalf("failures after successful process = %d, want 0 (forget)", f)
@@ -355,7 +356,7 @@ func TestProcessForgetsVanishedResource(t *testing.T) {
 	key := resourceKey{Kind: "container", Name: "ghost"}
 	rec.queue.enqueue(key)
 	got, _ := rec.queue.get()
-	rec.process(got) // Get → ErrNotFound → forget, no create
+	rec.process(context.Background(), got) // Get → ErrNotFound → forget, no create
 
 	if fake.created != 0 {
 		t.Errorf("created = %d, want 0 (no resource to reconcile)", fake.created)
@@ -378,6 +379,46 @@ func TestRunGracefulShutdown(t *testing.T) {
 	case <-done:
 	case <-time.After(2 * time.Second):
 		t.Fatal("Run did not return after context cancel")
+	}
+}
+
+// blockingProvider blocks in Observe until its context is cancelled, standing
+// in for a slow external substrate. enterOnce guards the entered signal since
+// the queue may drain a re-marked key a second time during shutdown.
+type blockingProvider struct {
+	kind      string
+	entered   chan struct{}
+	enterOnce sync.Once
+}
+
+func (b *blockingProvider) Kinds() []string { return []string{b.kind} }
+func (b *blockingProvider) Observe(ctx context.Context, res *api.Resource) (provider.Observation, error) {
+	b.enterOnce.Do(func() { close(b.entered) })
+	<-ctx.Done() // block until the reconcile context is cancelled
+	return provider.Observation{}, ctx.Err()
+}
+func (b *blockingProvider) Create(context.Context, *api.Resource) error { return nil }
+func (b *blockingProvider) Update(context.Context, *api.Resource) error { return nil }
+func (b *blockingProvider) Delete(context.Context, *api.Resource) error { return nil }
+
+func TestShutdownCancelsInFlightReconcile(t *testing.T) {
+	fake := &blockingProvider{kind: "container", entered: make(chan struct{})}
+	rec, st := newTest(fake)
+	putContainer(t, st, "web")
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() { rec.Run(ctx); close(done) }()
+
+	rec.Nudge()
+	<-fake.entered // a worker is now blocked inside Observe
+
+	cancel() // must unblock the in-flight reconcile via its context
+
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("Run hung: in-flight reconcile was not cancelled on shutdown")
 	}
 }
 
