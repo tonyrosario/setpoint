@@ -1,0 +1,7 @@
+# backfilled 2026-07-14 via scripts/backfill-receipt.sh from kit ref 86327b1
+# kit_commit is the stamped baseline; original stamp date is unknown
+kit_commit=86327b15f019c4586920194f9e4bea4283abead2
+kit_describe=86327b1
+stamped_at=2026-07-14
+skip_claude=0
+install_workflow=0
