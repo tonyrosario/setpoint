@@ -1,0 +1,5 @@
+# Claude Code local/ephemeral artifacts — do not commit.
+# This file ships with the .claude/ directory so the ignore travels with every
+# clone. A machine-global ignore protects only the machine that happens to have it.
+settings.local.json
+worktrees/
